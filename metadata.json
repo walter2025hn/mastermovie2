@@ -1,0 +1,6 @@
+{
+  "name": "Master Movie",
+  "description": "App móvil para ver películas y series de zonacero.lat con carga por lotes de 60, filtros avanzados y modo de rendimiento Bajo, Medio y Alto.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

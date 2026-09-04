@@ -1,0 +1,18 @@
+import type { CapacitorConfig } from "@capacitor/cli";
+
+const config: CapacitorConfig = {
+  appId: "com.mastermovie.app",
+  appName: "Master Movie",
+  webDir: "dist",
+  server: {
+    androidScheme: "https",
+    cleartext: true,
+    allowNavigation: ["zonacero.lat", "*.zonacero.lat", "http://zonacero.lat:8080*"]
+  },
+  android: {
+    allowMixedContent: true,
+    backgroundColor: "#050811"
+  }
+};
+
+export default config;

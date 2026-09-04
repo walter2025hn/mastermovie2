@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Safe Area for iOS and Android edge-to-edge displays */
+  .safe-area-pb {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+
+  /* Hide scrollbar for clean horizontal chip navigation */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Device Mode: Bajo (Performance & Battery optimization) */
+html.reduce-motion *,
+html[data-device-mode="bajo"] * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+html[data-device-mode="bajo"] .backdrop-blur-md,
+html[data-device-mode="bajo"] .backdrop-blur-sm,
+html[data-device-mode="bajo"] .backdrop-blur-lg {
+  backdrop-filter: none !important;
+  background-color: rgba(9, 14, 27, 0.98) !important;
+}
+
+/* Custom modern scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #060912;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #19253e;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00e5ff;
+}
