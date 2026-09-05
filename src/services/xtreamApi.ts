@@ -85,8 +85,59 @@ class XtreamService {
   private isDemoMode = false;
   private currentUserInfo: XtreamUserInfo | null = null;
 
+  // In-memory instant cache
+  private cachedVodCategories: MediaCategory[] | null = null;
+  private cachedSeriesCategories: MediaCategory[] | null = null;
+  private cachedMovies: MovieStream[] | null = null;
+  private cachedSeries: SeriesStream[] | null = null;
+  private moviesFetchPromise: Promise<MovieStream[]> | null = null;
+  private seriesFetchPromise: Promise<SeriesStream[]> | null = null;
+  private lastMoviesFetchTime = 0;
+  private lastSeriesFetchTime = 0;
+
   constructor() {
     this.loadSavedCredentials();
+    this.loadCachedCatalogFromStorage();
+  }
+
+  // Load previously cached catalog from storage for instant 0ms app start
+  private loadCachedCatalogFromStorage() {
+    try {
+      if (typeof window === "undefined") return;
+      const storedCats = localStorage.getItem("master_cache_vod_cats");
+      if (storedCats) {
+        this.cachedVodCategories = JSON.parse(storedCats);
+      }
+      const storedSerCats = localStorage.getItem("master_cache_ser_cats");
+      if (storedSerCats) {
+        this.cachedSeriesCategories = JSON.parse(storedSerCats);
+      }
+      const storedMovies = localStorage.getItem("master_cache_movies");
+      if (storedMovies) {
+        this.cachedMovies = JSON.parse(storedMovies);
+      }
+      const storedSeries = localStorage.getItem("master_cache_series");
+      if (storedSeries) {
+        this.cachedSeries = JSON.parse(storedSeries);
+      }
+    } catch (_e) {
+      // Storage might be restricted or full, ignore gracefully
+    }
+  }
+
+  // Get instantly available catalog (0ms latency for initial render)
+  public getCachedCatalog(): {
+    movies: MovieStream[];
+    series: SeriesStream[];
+    vodCategories: MediaCategory[];
+    seriesCategories: MediaCategory[];
+  } {
+    return {
+      movies: this.cachedMovies || [],
+      series: this.cachedSeries || [],
+      vodCategories: this.cachedVodCategories || [],
+      seriesCategories: this.cachedSeriesCategories || [],
+    };
   }
 
   public loadSavedCredentials(): { username: string; password: string; isDemo?: boolean; userInfo?: XtreamUserInfo } | null {
@@ -238,9 +289,13 @@ class XtreamService {
   }
 
   // Fetch Categories for VOD Movies
-  public async getVodCategories(): Promise<MediaCategory[]> {
+  public async getVodCategories(force = false): Promise<MediaCategory[]> {
     if (this.isDemoMode || !this.userCredentials) {
       return MOCK_CATEGORIES;
+    }
+
+    if (!force && this.cachedVodCategories && this.cachedVodCategories.length > 0) {
+      return this.cachedVodCategories;
     }
 
     try {
@@ -256,21 +311,30 @@ class XtreamService {
       );
 
       if (Array.isArray(categories) && categories.length > 0) {
-        return [
+        const full = [
           { category_id: "all", category_name: "Todas las Películas" },
           ...categories
         ];
+        this.cachedVodCategories = full;
+        try {
+          localStorage.setItem("master_cache_vod_cats", JSON.stringify(full));
+        } catch (_e) {}
+        return full;
       }
-      return MOCK_CATEGORIES;
+      return this.cachedVodCategories || MOCK_CATEGORIES;
     } catch (_e) {
-      return MOCK_CATEGORIES;
+      return this.cachedVodCategories || MOCK_CATEGORIES;
     }
   }
 
   // Fetch Categories for Series
-  public async getSeriesCategories(): Promise<MediaCategory[]> {
+  public async getSeriesCategories(force = false): Promise<MediaCategory[]> {
     if (this.isDemoMode || !this.userCredentials) {
       return MOCK_SERIES_CATEGORIES;
+    }
+
+    if (!force && this.cachedSeriesCategories && this.cachedSeriesCategories.length > 0) {
+      return this.cachedSeriesCategories;
     }
 
     try {
@@ -286,77 +350,182 @@ class XtreamService {
       );
 
       if (Array.isArray(categories) && categories.length > 0) {
-        return [
+        const full = [
           { category_id: "all", category_name: "Todas las Series" },
           ...categories
         ];
+        this.cachedSeriesCategories = full;
+        try {
+          localStorage.setItem("master_cache_ser_cats", JSON.stringify(full));
+        } catch (_e) {}
+        return full;
       }
-      return MOCK_SERIES_CATEGORIES;
+      return this.cachedSeriesCategories || MOCK_SERIES_CATEGORIES;
     } catch (_e) {
-      return MOCK_SERIES_CATEGORIES;
+      return this.cachedSeriesCategories || MOCK_SERIES_CATEGORIES;
     }
   }
 
-  // Fetch Movies list
-  public async getMovies(categoryId?: string): Promise<MovieStream[]> {
+  // Fetch Movies list with high-speed caching & in-flight deduplication
+  public async getMovies(categoryId?: string, force = false): Promise<MovieStream[]> {
     if (this.isDemoMode || !this.userCredentials) {
       const all = generateMockMovies();
       if (!categoryId || categoryId === "all") return all;
       return all.filter(m => m.category_id === categoryId);
     }
 
-    try {
-      const catParam = categoryId && categoryId !== "all" ? `&category_id=${encodeURIComponent(categoryId)}` : "";
-      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_vod_streams${catParam}`;
-      const data = await fetchProxyOrDirect(
-        "/api/xtream/streams",
-        {
-          username: this.userCredentials.username,
-          password: this.userCredentials.password,
-          type: "vod",
-          category_id: categoryId === "all" ? undefined : categoryId
-        },
-        directUrl
-      );
+    const isFullCatalog = !categoryId || categoryId === "all";
 
-      if (Array.isArray(data) && data.length > 0) {
-        return data;
+    // If requesting full catalog and cached in memory, return instantly if fresh
+    const now = Date.now();
+    if (!force && isFullCatalog && this.cachedMovies && this.cachedMovies.length > 0) {
+      // Re-fetch in background if older than 10 minutes, but return instantly now
+      if (now - this.lastMoviesFetchTime > 10 * 60 * 1000 && !this.moviesFetchPromise) {
+        this.fetchMoviesFromServer();
       }
-      return generateMockMovies();
-    } catch (_e) {
-      return generateMockMovies();
+      return this.cachedMovies;
     }
+
+    if (isFullCatalog && this.moviesFetchPromise) {
+      return this.moviesFetchPromise;
+    }
+
+    return this.fetchMoviesFromServer(categoryId);
   }
 
-  // Fetch Series list
-  public async getSeries(categoryId?: string): Promise<SeriesStream[]> {
+  private async fetchMoviesFromServer(categoryId?: string): Promise<MovieStream[]> {
+    const isFullCatalog = !categoryId || categoryId === "all";
+    if (!this.userCredentials) return generateMockMovies();
+
+    const fetchTask = (async () => {
+      try {
+        const catParam = categoryId && categoryId !== "all" ? `&category_id=${encodeURIComponent(categoryId)}` : "";
+        const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_vod_streams${catParam}`;
+        const data = await fetchProxyOrDirect(
+          "/api/xtream/streams",
+          {
+            username: this.userCredentials.username,
+            password: this.userCredentials.password,
+            type: "vod",
+            category_id: categoryId === "all" ? undefined : categoryId
+          },
+          directUrl
+        );
+
+        if (Array.isArray(data) && data.length > 0) {
+          if (isFullCatalog) {
+            this.cachedMovies = data;
+            this.lastMoviesFetchTime = Date.now();
+            try {
+              // Store compact representation to stay under storage quotas
+              const compact = data.slice(0, 1500).map(m => ({
+                stream_id: m.stream_id,
+                name: m.name,
+                stream_icon: m.stream_icon,
+                category_id: m.category_id,
+                rating: m.rating,
+                rating_5based: m.rating_5based,
+                container_extension: m.container_extension
+              }));
+              localStorage.setItem("master_cache_movies", JSON.stringify(compact));
+            } catch (_e) {}
+          }
+          return data;
+        }
+        return this.cachedMovies || generateMockMovies();
+      } catch (_e) {
+        return this.cachedMovies || generateMockMovies();
+      } finally {
+        if (isFullCatalog) {
+          this.moviesFetchPromise = null;
+        }
+      }
+    })();
+
+    if (isFullCatalog) {
+      this.moviesFetchPromise = fetchTask;
+    }
+
+    return fetchTask;
+  }
+
+  // Fetch Series list with caching & deduplication
+  public async getSeries(categoryId?: string, force = false): Promise<SeriesStream[]> {
     if (this.isDemoMode || !this.userCredentials) {
       const all = generateMockSeries();
       if (!categoryId || categoryId === "all") return all;
       return all.filter(s => s.category_id === categoryId);
     }
 
-    try {
-      const catParam = categoryId && categoryId !== "all" ? `&category_id=${encodeURIComponent(categoryId)}` : "";
-      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_series${catParam}`;
-      const data = await fetchProxyOrDirect(
-        "/api/xtream/streams",
-        {
-          username: this.userCredentials.username,
-          password: this.userCredentials.password,
-          type: "series",
-          category_id: categoryId === "all" ? undefined : categoryId
-        },
-        directUrl
-      );
+    const isFullCatalog = !categoryId || categoryId === "all";
+    const now = Date.now();
 
-      if (Array.isArray(data) && data.length > 0) {
-        return data;
+    if (!force && isFullCatalog && this.cachedSeries && this.cachedSeries.length > 0) {
+      if (now - this.lastSeriesFetchTime > 10 * 60 * 1000 && !this.seriesFetchPromise) {
+        this.fetchSeriesFromServer();
       }
-      return generateMockSeries();
-    } catch (_e) {
-      return generateMockSeries();
+      return this.cachedSeries;
     }
+
+    if (isFullCatalog && this.seriesFetchPromise) {
+      return this.seriesFetchPromise;
+    }
+
+    return this.fetchSeriesFromServer(categoryId);
+  }
+
+  private async fetchSeriesFromServer(categoryId?: string): Promise<SeriesStream[]> {
+    const isFullCatalog = !categoryId || categoryId === "all";
+    if (!this.userCredentials) return generateMockSeries();
+
+    const fetchTask = (async () => {
+      try {
+        const catParam = categoryId && categoryId !== "all" ? `&category_id=${encodeURIComponent(categoryId)}` : "";
+        const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_series${catParam}`;
+        const data = await fetchProxyOrDirect(
+          "/api/xtream/streams",
+          {
+            username: this.userCredentials.username,
+            password: this.userCredentials.password,
+            type: "series",
+            category_id: categoryId === "all" ? undefined : categoryId
+          },
+          directUrl
+        );
+
+        if (Array.isArray(data) && data.length > 0) {
+          if (isFullCatalog) {
+            this.cachedSeries = data;
+            this.lastSeriesFetchTime = Date.now();
+            try {
+              const compact = data.slice(0, 1000).map(s => ({
+                series_id: s.series_id,
+                name: s.name,
+                cover: s.cover,
+                category_id: s.category_id,
+                rating: s.rating,
+                rating_5based: s.rating_5based,
+              }));
+              localStorage.setItem("master_cache_series", JSON.stringify(compact));
+            } catch (_e) {}
+          }
+          return data;
+        }
+        return this.cachedSeries || generateMockSeries();
+      } catch (_e) {
+        return this.cachedSeries || generateMockSeries();
+      } finally {
+        if (isFullCatalog) {
+          this.seriesFetchPromise = null;
+        }
+      }
+    })();
+
+    if (isFullCatalog) {
+      this.seriesFetchPromise = fetchTask;
+    }
+
+    return fetchTask;
   }
 
   // Fetch Series Info (seasons and episodes)

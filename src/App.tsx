@@ -29,6 +29,7 @@ import {
   HistoryItem
 } from './types';
 import { xtreamService } from './services/xtreamApi';
+import { App as CapacitorApp } from '@capacitor/app';
 import { useDeviceMode } from './hooks/useDeviceMode';
 import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
@@ -169,74 +170,87 @@ export default function App() {
     activeTabRef.current = activeTab;
   }, [activeTab]);
 
-  // Back-button navigation handling: closes player -> closes detail -> closes modals -> returns to previous tab -> asks confirmation to exit
+  // Central back-button action with history memory:
+  // closes player -> closes detail -> closes modals -> returns to previous tab -> asks confirmation to exit
+  const handleBackAction = () => {
+    // 1. Si el reproductor de video está abierto, cerrarlo
+    if (activePlaybackRef.current) {
+      setActivePlayback(null);
+      return;
+    }
+
+    // 2. Si la ficha de detalles está abierta, cerrarla
+    if (selectedItemRef.current) {
+      setSelectedItem(null);
+      return;
+    }
+
+    // 3. Si hay modales auxiliares abiertos, cerrarlos
+    if (showSupportModalRef.current) {
+      setShowSupportModal(false);
+      return;
+    }
+    if (showDeviceSelectorRef.current) {
+      setShowDeviceSelector(false);
+      return;
+    }
+
+    // 4. Si el diálogo de confirmación de salida ya estaba abierto, cancelarlo/cerrarlo
+    if (showExitPromptRef.current) {
+      setShowExitPrompt(false);
+      return;
+    }
+
+    // 5. Navegar hacia la pestaña previa guardada en la memoria (historial)
+    if (tabHistoryRef.current.length > 0) {
+      const historyCopy = [...tabHistoryRef.current];
+      const previousTab = historyCopy.pop();
+      if (previousTab) {
+        setTabHistory(historyCopy);
+        setActiveTab(previousTab);
+        localStorage.setItem('master_movie_active_tab', previousTab);
+        return;
+      }
+    }
+
+    // 6. Si está en una pestaña secundaria sin historial previo, volver a 'all'
+    if (activeTabRef.current !== 'all') {
+      setActiveTab('all');
+      localStorage.setItem('master_movie_active_tab', 'all');
+      return;
+    }
+
+    // 7. En la pestaña raíz sin elementos abiertos: MOSTRAR AVISO PREGUNTANDO SI QUIERE SALIR
+    setShowExitPrompt(true);
+  };
+
+  // Back-button navigation listeners: Web popstate + Native Android Capacitor backButton
   useEffect(() => {
     window.history.replaceState({ appRoot: true, tab: activeTab }, '');
     window.history.pushState({ appNav: true, tab: activeTab }, '');
 
     const handlePopState = () => {
-      // 1. Si el reproductor de video está abierto, cerrarlo primero
-      if (activePlaybackRef.current) {
-        setActivePlayback(null);
-        window.history.pushState({ appNav: true, tab: activeTabRef.current }, '');
-        return;
-      }
-
-      // 2. Si la ficha de detalles está abierta, cerrarla
-      if (selectedItemRef.current) {
-        setSelectedItem(null);
-        window.history.pushState({ appNav: true, tab: activeTabRef.current }, '');
-        return;
-      }
-
-      // 3. Si hay modales auxiliares abiertos, cerrarlos
-      if (showSupportModalRef.current) {
-        setShowSupportModal(false);
-        window.history.pushState({ appNav: true, tab: activeTabRef.current }, '');
-        return;
-      }
-      if (showDeviceSelectorRef.current) {
-        setShowDeviceSelector(false);
-        window.history.pushState({ appNav: true, tab: activeTabRef.current }, '');
-        return;
-      }
-
-      // 4. Si el diálogo de salida ya estaba abierto, cerrarlo al pulsar atrás
-      if (showExitPromptRef.current) {
-        setShowExitPrompt(false);
-        window.history.pushState({ appNav: true, tab: activeTabRef.current }, '');
-        return;
-      }
-
-      // 5. Navegar hacia la pestaña previa guardada en el historial
-      if (tabHistoryRef.current.length > 0) {
-        const historyCopy = [...tabHistoryRef.current];
-        const previousTab = historyCopy.pop();
-        if (previousTab) {
-          setTabHistory(historyCopy);
-          setActiveTab(previousTab);
-          localStorage.setItem('master_movie_active_tab', previousTab);
-          window.history.pushState({ appNav: true, tab: previousTab }, '');
-          return;
-        }
-      }
-
-      // 6. Si está en una pestaña secundaria sin historial previo, volver a 'all'
-      if (activeTabRef.current !== 'all') {
-        setActiveTab('all');
-        localStorage.setItem('master_movie_active_tab', 'all');
-        window.history.pushState({ appNav: true, tab: 'all' }, '');
-        return;
-      }
-
-      // 7. En la pestaña raíz sin elementos abiertos: MOSTRAR AVISO PREGUNTANDO SI QUIERE SALIR
-      setShowExitPrompt(true);
-      window.history.pushState({ appNav: true, tab: 'all' }, '');
+      handleBackAction();
+      window.history.pushState({ appNav: true, tab: activeTabRef.current }, '');
     };
 
     window.addEventListener('popstate', handlePopState);
+
+    // Capacitor Native Android hardware / gesture back button
+    let removeNativeListener: (() => void) | null = null;
+    try {
+      CapacitorApp.addListener('backButton', () => {
+        handleBackAction();
+      }).then((handle) => {
+        removeNativeListener = () => handle.remove();
+      }).catch(() => {});
+    } catch (_e) {}
+
     return () => {
       window.removeEventListener('popstate', handlePopState);
+      if (removeNativeListener) {
+        removeNativeListener();
+      }
     };
   }, []);
 
@@ -257,26 +271,53 @@ export default function App() {
     setCheckingAuth(false);
   }, []);
 
-  // Fetch categories and streams when authenticated
+  // Fetch categories and streams when authenticated with instant local cache + progressive streaming
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    setLoadingContent(true);
+    // 1. Instant display from local storage/memory cache (0ms wait!)
+    const cached = xtreamService.getCachedCatalog();
+    let hasCachedData = false;
 
-    Promise.all([
-      xtreamService.getVodCategories(),
-      xtreamService.getSeriesCategories(),
-      xtreamService.getMovies(),
-      xtreamService.getSeries(),
-    ])
-      .then(([vodCats, serCats, movieList, seriesList]) => {
-        setVodCategories(vodCats);
-        setSeriesCategories(serCats);
-        setMovies(movieList);
-        setSeries(seriesList);
-      })
-      .catch((err) => console.error('Error fetching catalog:', err))
+    if (cached.movies && cached.movies.length > 0) {
+      setMovies(cached.movies);
+      hasCachedData = true;
+    }
+    if (cached.vodCategories && cached.vodCategories.length > 0) {
+      setVodCategories(cached.vodCategories);
+      hasCachedData = true;
+    }
+    if (cached.seriesCategories && cached.seriesCategories.length > 0) {
+      setSeriesCategories(cached.seriesCategories);
+    }
+    if (cached.series && cached.series.length > 0) {
+      setSeries(cached.series);
+    }
+
+    if (hasCachedData) {
+      setLoadingContent(false);
+    } else {
+      setLoadingContent(true);
+    }
+
+    // 2. Progressive loading: fetch movies & categories first so movies appear immediately!
+    xtreamService.getVodCategories().then((vodCats) => {
+      setVodCategories(vodCats);
+    }).catch(() => {});
+
+    xtreamService.getMovies().then((movieList) => {
+      setMovies(movieList);
+      setLoadingContent(false);
+    }).catch(() => {})
       .finally(() => setLoadingContent(false));
+
+    xtreamService.getSeriesCategories().then((serCats) => {
+      setSeriesCategories(serCats);
+    }).catch(() => {});
+
+    xtreamService.getSeries().then((seriesList) => {
+      setSeries(seriesList);
+    }).catch(() => {});
   }, [isAuthenticated]);
 
   // Reset pagination batch count when tab, category, genre, year, sort, or query changes
@@ -669,6 +710,8 @@ export default function App() {
         isDemo={isDemoUser}
         expirationFormatted={expirationInfo.shortDate}
         expirationFull={expirationInfo.formatted}
+        canGoBack={tabHistory.length > 0 || activeTab !== 'all'}
+        onGoBack={handleBackAction}
       />
 
       {/* Main Content Area */}
@@ -962,10 +1005,12 @@ export default function App() {
           onConfirmExit={() => {
             setShowExitPrompt(false);
             try {
-              window.close();
-            } catch (_e) {}
-            // Unwind history
-            window.history.go(-2);
+              CapacitorApp.exitApp();
+            } catch (_e) {
+              try {
+                window.close();
+              } catch (_err) {}
+            }
           }}
         />
       )}

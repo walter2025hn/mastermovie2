@@ -103,8 +103,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   } | null>(null);
   const hudTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Double tap tracking
+  // Tap tracking
   const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  const singleTapTimerRef = useRef<NodeJS.Timeout | null>(null);
   const touchStartRef = useRef<{ x: number; y: number; startVal: number; side: 'left' | 'right' } | null>(null);
 
   const showHud = useCallback((type: 'volume' | 'brightness' | 'seek-forward' | 'seek-backward' | 'boost', value: string | number) => {
@@ -292,16 +293,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [initStream]);
 
-  // Controls auto-hide timer
+  // Controls auto-hide timer (4.5s)
   useEffect(() => {
     let timeout: NodeJS.Timeout;
     if (isPlaying && showControls && !isScreenLocked) {
       timeout = setTimeout(() => {
         setShowControls(false);
-      }, 3500);
+      }, 4500);
     }
     return () => clearTimeout(timeout);
   }, [isPlaying, showControls, isScreenLocked]);
+
+  useEffect(() => {
+    return () => {
+      if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
+    };
+  }, []);
 
   // Time & Buffer progress
   const handleTimeUpdate = () => {
@@ -520,14 +527,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const x = touch.clientX - rect.left;
     const y = touch.clientY - rect.top;
 
+    const isSwipe =
+      touchStartRef.current &&
+      (Math.abs(touchStartRef.current.y - y) > 15 || Math.abs(touchStartRef.current.x - x) > 15);
     touchStartRef.current = null;
 
-    // Check for double tap
+    if (isSwipe) return;
+
+    // Check for double tap (+10s or -10s)
     if (lastTapRef.current && now - lastTapRef.current.time < 300) {
       const diffX = Math.abs(x - lastTapRef.current.x);
       const diffY = Math.abs(y - lastTapRef.current.y);
 
       if (diffX < 50 && diffY < 50) {
+        if (singleTapTimerRef.current) {
+          clearTimeout(singleTapTimerRef.current);
+          singleTapTimerRef.current = null;
+        }
         // Valid double tap
         if (x < rect.width * 0.4) {
           skipSeconds(-10);
@@ -542,6 +558,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     lastTapRef.current = { time: now, x, y };
+
+    // Single tap on screen triggers the controls menu (pause, adelantar, retroceder, etc.)
+    if (singleTapTimerRef.current) {
+      clearTimeout(singleTapTimerRef.current);
+    }
+    singleTapTimerRef.current = setTimeout(() => {
+      setShowControls((prev) => !prev);
+      singleTapTimerRef.current = null;
+    }, 250);
   };
 
   return (
@@ -577,7 +602,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         style={{
           filter: `brightness(${brightness})`,
         }}
-        className={`w-full h-full transition-all duration-200 ${
+        className={`w-full h-full transition-all duration-200 cursor-pointer ${
           aspectMode === 'cover'
             ? 'object-cover'
             : aspectMode === 'fill'
@@ -740,7 +765,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Main Overlay UI Controls */}
       <div
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowControls(false);
+          }
+        }}
         className={`absolute inset-0 flex flex-col justify-between p-4 sm:p-6 bg-gradient-to-b from-black/85 via-transparent to-black/95 transition-opacity duration-300 z-30 ${
           showControls && !isScreenLocked
             ? 'opacity-100 pointer-events-auto'

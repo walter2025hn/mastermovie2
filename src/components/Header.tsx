@@ -1,5 +1,5 @@
 import React from 'react';
-import { Smartphone, LogOut, Sparkles, Heart, Calendar } from 'lucide-react';
+import { Smartphone, LogOut, Sparkles, Heart, Calendar, ArrowLeft } from 'lucide-react';
 import { DevicePerformanceMode } from '../types';
 
 interface HeaderProps {
@@ -11,6 +11,8 @@ interface HeaderProps {
   isDemo?: boolean;
   expirationFormatted?: string;
   expirationFull?: string;
+  canGoBack?: boolean;
+  onGoBack?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +24,8 @@ export const Header: React.FC<HeaderProps> = ({
   isDemo,
   expirationFormatted,
   expirationFull,
+  canGoBack,
+  onGoBack,
 }) => {
   const getModeBadge = () => {
     switch (deviceMode) {
@@ -54,6 +58,18 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         {/* Brand Logo & Name */}
         <div className="flex items-center gap-2.5">
+          {canGoBack && onGoBack && (
+            <button
+              id="header-back-btn"
+              type="button"
+              onClick={onGoBack}
+              className="flex items-center justify-center p-2 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/90 border border-cyan-500/30 text-cyan-300 transition active:scale-95 shadow-sm"
+              title="Volver a la pestaña anterior"
+              aria-label="Volver atrás"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
           <div className="relative w-9 h-9 rounded-xl overflow-hidden shadow-lg shadow-cyan-500/20 border border-cyan-400/30 bg-black flex-shrink-0">
             <img
               src="/logo.png"
