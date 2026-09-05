@@ -1,11 +1,12 @@
 import React from 'react';
-import { Smartphone, LogOut, Sparkles, Heart, Calendar, ArrowLeft } from 'lucide-react';
+import { Smartphone, LogOut, Sparkles, Heart, Calendar, ArrowLeft, ShieldAlert } from 'lucide-react';
 import { DevicePerformanceMode } from '../types';
 
 interface HeaderProps {
   deviceMode: DevicePerformanceMode;
   onOpenDeviceSelector: () => void;
   onOpenSupportModal?: () => void;
+  onOpenAdminPanel?: () => void;
   onLogout: () => void;
   username?: string;
   isDemo?: boolean;
@@ -19,6 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
   deviceMode,
   onOpenDeviceSelector,
   onOpenSupportModal,
+  onOpenAdminPanel,
   onLogout,
   username,
   isDemo,
@@ -132,6 +134,19 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Heart className="w-3.5 h-3.5 text-pink-400 fill-pink-500/50" />
               <span className="hidden sm:inline">Apoyar</span>
+            </button>
+          )}
+
+          {/* Master Admin Panel Button */}
+          {onOpenAdminPanel && (
+            <button
+              id="open-admin-panel-btn"
+              onClick={onOpenAdminPanel}
+              className="p-1.5 rounded-lg text-cyan-400/80 hover:text-cyan-300 hover:bg-cyan-950/50 border border-cyan-500/20 hover:border-cyan-500/50 transition active:scale-95"
+              title="Control Maestro / Admin"
+              aria-label="Control Maestro"
+            >
+              <ShieldAlert className="w-4 h-4" />
             </button>
           )}
 

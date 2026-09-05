@@ -16,7 +16,9 @@ import {
   User,
   Calendar,
   Clock,
-  LogOut
+  LogOut,
+  ShieldAlert,
+  Megaphone
 } from 'lucide-react';
 import {
   ContentTab,
@@ -26,7 +28,8 @@ import {
   FilterOptions,
   SeriesEpisode,
   XtreamUserInfo,
-  HistoryItem
+  HistoryItem,
+  AppRemoteConfig
 } from './types';
 import { xtreamService } from './services/xtreamApi';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -45,6 +48,11 @@ import { LoginModal } from './components/LoginModal';
 import { SupportCreatorCard } from './components/SupportCreatorCard';
 import { SupportCreatorModal } from './components/SupportCreatorModal';
 import { ExitConfirmModal } from './components/ExitConfirmModal';
+import { AdminPanelModal } from './components/AdminPanelModal';
+import { MaintenanceScreen } from './components/MaintenanceScreen';
+import { ForceUpdateModal } from './components/ForceUpdateModal';
+import { BlockedUserScreen } from './components/BlockedUserScreen';
+import { remoteControlService, CURRENT_APP_VERSION, DEFAULT_REMOTE_CONFIG } from './services/remoteControl';
 import { formatExpirationDate } from './utils/dateFormatter';
 import {
   extractMediaYear,
@@ -133,12 +141,22 @@ export default function App() {
   const [showDeviceSelector, setShowDeviceSelector] = useState<boolean>(false);
   const [showSupportModal, setShowSupportModal] = useState<boolean>(false);
 
+  // Remote Control & Server Configuration (Firebase Firestore)
+  const [remoteConfig, setRemoteConfig] = useState<AppRemoteConfig>(DEFAULT_REMOTE_CONFIG);
+  const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
+  const [isUserBlocked, setIsUserBlocked] = useState<boolean>(false);
+  const [userBlockReason, setUserBlockReason] = useState<string>('');
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
+  const [isUpdateMandatory, setIsUpdateMandatory] = useState<boolean>(false);
+  const [dismissedUpdate, setDismissedUpdate] = useState<boolean>(false);
+
   // Synchronized refs for popstate (Android / browser back navigation trap)
   const activePlaybackRef = useRef(activePlayback);
   const selectedItemRef = useRef(selectedItem);
   const showSupportModalRef = useRef(showSupportModal);
   const showDeviceSelectorRef = useRef(showDeviceSelector);
   const showExitPromptRef = useRef(showExitPrompt);
+  const showAdminPanelRef = useRef(showAdminPanel);
   const tabHistoryRef = useRef(tabHistory);
   const activeTabRef = useRef(activeTab);
 
@@ -163,6 +181,10 @@ export default function App() {
   }, [showExitPrompt]);
 
   useEffect(() => {
+    showAdminPanelRef.current = showAdminPanel;
+  }, [showAdminPanel]);
+
+  useEffect(() => {
     tabHistoryRef.current = tabHistory;
   }, [tabHistory]);
 
@@ -170,9 +192,51 @@ export default function App() {
     activeTabRef.current = activeTab;
   }, [activeTab]);
 
+  // Subscribe to Remote Config in real-time
+  useEffect(() => {
+    const unsubscribe = remoteControlService.subscribeToConfig((config) => {
+      setRemoteConfig(config);
+
+      const required = remoteControlService.isUpdateRequired(CURRENT_APP_VERSION, config.minRequiredVersion);
+      const newer = remoteControlService.hasNewerVersion(CURRENT_APP_VERSION, config.latestVersion);
+      const forceNewer = config.forceUpdate && newer;
+
+      if (required || forceNewer) {
+        setIsUpdateMandatory(true);
+        setShowUpdateModal(true);
+      } else if (newer && !dismissedUpdate) {
+        setIsUpdateMandatory(false);
+        setShowUpdateModal(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [dismissedUpdate]);
+
+  // Subscribe to Blocked Status for active user in real-time
+  useEffect(() => {
+    if (!username) {
+      setIsUserBlocked(false);
+      return;
+    }
+
+    const unsubscribe = remoteControlService.listenUserBlockedStatus(username, (blocked, reason) => {
+      setIsUserBlocked(blocked);
+      if (reason) setUserBlockReason(reason);
+    });
+
+    return () => unsubscribe();
+  }, [username]);
+
   // Central back-button action with history memory:
   // closes player -> closes detail -> closes modals -> returns to previous tab -> asks confirmation to exit
   const handleBackAction = () => {
+    // 0. Si el panel de control maestro está abierto, cerrarlo
+    if (showAdminPanelRef.current) {
+      setShowAdminPanel(false);
+      return;
+    }
+
     // 1. Si el reproductor de video está abierto, cerrarlo
     if (activePlaybackRef.current) {
       setActivePlayback(null);
@@ -705,6 +769,10 @@ export default function App() {
           setShowSupportModal(true);
           window.history.pushState({ appNav: true, tab: activeTab }, '');
         }}
+        onOpenAdminPanel={() => {
+          setShowAdminPanel(true);
+          window.history.pushState({ appNav: true, tab: activeTab }, '');
+        }}
         onLogout={handleLogout}
         username={username}
         isDemo={isDemoUser}
@@ -714,11 +782,49 @@ export default function App() {
         onGoBack={handleBackAction}
       />
 
+      {/* Global Live Announcement Banner */}
+      {remoteConfig.showAnnouncement && remoteConfig.globalAnnouncement && (
+        <div
+          id="global-announcement-banner"
+          className="bg-gradient-to-r from-cyan-950 via-zinc-900 to-cyan-950 border-b border-cyan-500/30 px-4 py-2 text-xs text-cyan-200 flex items-center justify-center gap-2 shadow-md shadow-cyan-950/20"
+        >
+          <Megaphone className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0 animate-pulse" />
+          <span className="text-center font-medium tracking-wide">
+            {remoteConfig.globalAnnouncement}
+          </span>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3.5 sm:px-6 pt-3 pb-24 space-y-4">
         {/* Settings / Device Mode View */}
         {activeTab === 'settings' ? (
           <div className="max-w-xl mx-auto space-y-5 pt-2">
+            {/* Master Server & Remote Admin Control */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-cyan-950/40 border border-cyan-500/30 space-y-3 shadow-lg shadow-cyan-950/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-cyan-300 font-bold text-sm">
+                  <ShieldAlert className="w-5 h-5 text-cyan-400" />
+                  <span>Panel de Control Maestro y Servidor</span>
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                  v{CURRENT_APP_VERSION}
+                </span>
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Controla de forma remota el modo mantenimiento, bloqueo de usuarios, avisos globales y lanza nuevas actualizaciones de la app en tiempo real.
+              </p>
+              <button
+                id="settings-open-admin-btn"
+                type="button"
+                onClick={() => setShowAdminPanel(true)}
+                className="w-full py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-xs flex items-center justify-center gap-2 transition active:scale-[0.99] shadow-lg shadow-cyan-500/20 cursor-pointer"
+              >
+                <ShieldAlert className="w-4 h-4" />
+                <span>Abrir Control Maestro (Admin)</span>
+              </button>
+            </div>
+
             {/* Section: Apoyar al creador */}
             <SupportCreatorCard />
 
@@ -1030,6 +1136,51 @@ export default function App() {
           onSelectDeviceMode={setDeviceMode}
         />
       )}
+
+      {/* Remote Maintenance Screen (Kill switch) */}
+      {remoteConfig.maintenanceMode && !showAdminPanel && (
+        <MaintenanceScreen
+          message={remoteConfig.maintenanceMessage}
+          onOpenAdmin={() => setShowAdminPanel(true)}
+        />
+      )}
+
+      {/* Blocked User Screen (Ban lock) */}
+      {isAuthenticated && isUserBlocked && !showAdminPanel && (
+        <BlockedUserScreen
+          username={username}
+          reason={userBlockReason}
+          onLogout={handleLogout}
+        />
+      )}
+
+      {/* Force / Recommended Update Modal */}
+      {showUpdateModal && (
+        <ForceUpdateModal
+          isOpen={showUpdateModal}
+          onClose={
+            isUpdateMandatory
+              ? undefined
+              : () => {
+                  setShowUpdateModal(false);
+                  setDismissedUpdate(true);
+                }
+          }
+          config={remoteConfig}
+          isForced={isUpdateMandatory}
+        />
+      )}
+
+      {/* Remote Master Admin Panel */}
+      {showAdminPanel && (
+        <AdminPanelModal
+          isOpen={showAdminPanel}
+          onClose={() => setShowAdminPanel(false)}
+          config={remoteConfig}
+          onConfigUpdated={setRemoteConfig}
+        />
+      )}
     </div>
   );
 }
+

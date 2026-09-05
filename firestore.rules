@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // App remote configuration & kill switch
+    match /app_config/{configId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Blocked users registry
+    match /blocked_users/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

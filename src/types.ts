@@ -161,3 +161,26 @@ export interface FilterOptions {
   sortBy: 'recent' | 'year-desc' | 'year-asc' | 'rating' | 'az' | 'za';
   mediaTypeFilter?: 'all' | 'movies' | 'series';
 }
+
+export interface AppRemoteConfig {
+  maintenanceMode: boolean;
+  maintenanceMessage: string;
+  latestVersion: string;
+  minRequiredVersion: string;
+  updateUrl: string;
+  forceUpdate: boolean;
+  updateMessage: string;
+  globalAnnouncement: string;
+  showAnnouncement: boolean;
+  adminPin: string;
+  customXtreamHost?: string;
+  updatedAt?: string;
+}
+
+export interface BlockedUserRecord {
+  username: string;
+  reason: string;
+  blockedAt: string;
+  active: boolean;
+}
+
