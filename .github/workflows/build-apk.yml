@@ -17,11 +17,10 @@ jobs:
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
 
       - name: Instalar dependencias
-        run: npm ci || npm install
+        run: npm install
 
       - name: Compilar aplicación web
         run: npm run build
@@ -37,7 +36,7 @@ jobs:
 
       - name: Instalar Capacitor CLI y plataforma Android
         run: |
-          npm install @capacitor/cli @capacitor/android
+          npm install @capacitor/cli @capacitor/android @capacitor/core
           npx cap add android || true
           npx cap sync android
 
