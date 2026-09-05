@@ -4,8 +4,13 @@ const config: CapacitorConfig = {
   appId: "com.mastermovie.app",
   appName: "Master Movie",
   webDir: "dist",
+  plugins: {
+    CapacitorHttp: {
+      enabled: true
+    }
+  },
   server: {
-    androidScheme: "https",
+    androidScheme: "http",
     cleartext: true,
     allowNavigation: ["zonacero.lat", "*.zonacero.lat", "http://zonacero.lat:8080*"]
   },

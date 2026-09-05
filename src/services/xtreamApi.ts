@@ -1,7 +1,84 @@
 import { XtreamUserInfo, MediaCategory, MovieStream, SeriesStream, SeriesDetails } from '../types';
 import { MOCK_CATEGORIES, MOCK_SERIES_CATEGORIES, generateMockMovies, generateMockSeries } from './mockData';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 export const XTREAM_SERVER_HOST = "http://zonacero.lat:8080";
+
+export function isNativeApp(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    return (
+      Capacitor.isNativePlatform() ||
+      window.location.protocol === "capacitor:" ||
+      window.location.protocol === "file:" ||
+      (window.location.hostname === "localhost" && !window.location.port)
+    );
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function fetchDirectJson(url: string, timeout = 25000): Promise<any> {
+  if (isNativeApp()) {
+    try {
+      const res = await CapacitorHttp.get({
+        url,
+        connectTimeout: timeout,
+        readTimeout: timeout
+      });
+      if (res.status === 200 && res.data) {
+        if (typeof res.data === 'string') {
+          try {
+            return JSON.parse(res.data);
+          } catch (_e) {
+            return res.data;
+          }
+        }
+        return res.data;
+      }
+    } catch (err) {
+      console.warn("CapacitorHttp failed, fallback to fetch:", err);
+    }
+  }
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (_e) {
+      return text;
+    }
+  } catch (err) {
+    clearTimeout(t);
+    throw err;
+  }
+}
+
+async function fetchProxyOrDirect(endpoint: string, proxyBody: any, directUrl: string): Promise<any> {
+  // If not native, try local server proxy first (prevents mixed-content inside browser)
+  if (!isNativeApp()) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(proxyBody)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (_e) {
+      // Local proxy failed or not present, fallback to direct
+    }
+  }
+
+  // In native Android APK or when proxy is unreachable, use direct request
+  return await fetchDirectJson(directUrl);
+}
 
 class XtreamService {
   private userCredentials: { username: string; password: string } | null = null;
@@ -61,7 +138,14 @@ class XtreamService {
 
   // Authenticate user with zonacero.lat:8080
   public async authenticate(username: string, password: string): Promise<{ success: boolean; user_info?: XtreamUserInfo; error?: string }> {
-    if (username.trim().toLowerCase() === "demo" || username.trim().toLowerCase() === "master") {
+    const trimmedUser = username.trim();
+    const trimmedPass = password.trim();
+
+    if (!trimmedUser || !trimmedPass) {
+      return { success: false, error: "Ingresa usuario y contraseña" };
+    }
+
+    if (trimmedUser.toLowerCase() === "demo" || trimmedUser.toLowerCase() === "master") {
       const demoUser: XtreamUserInfo = {
         username: "Master VIP",
         status: "Active",
@@ -69,41 +153,67 @@ class XtreamService {
         max_connections: "3",
         auth: 1
       };
-      this.saveCredentials(username, password, true, demoUser);
+      this.saveCredentials(trimmedUser, trimmedPass, true, demoUser);
       return {
         success: true,
         user_info: demoUser
       };
     }
 
+    const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(trimmedUser)}&password=${encodeURIComponent(trimmedPass)}`;
+
     try {
-      const response = await fetch("/api/xtream/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
-      });
+      let data: any = null;
 
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        return { success: false, error: errJson.error || "Cuenta Inválida" };
-      }
-
-      const data = await response.json();
-      const auth = data?.user_info?.auth;
-      const status = data?.user_info?.status;
-
-      if (auth === 1 || auth === "1" || status === "Active" || status === "active") {
-        this.saveCredentials(username, password, false, data.user_info);
-        return {
-          success: true,
-          user_info: data.user_info
-        };
+      if (isNativeApp()) {
+        data = await fetchDirectJson(directUrl, 15000);
       } else {
-        return {
-          success: false,
-          error: "Cuenta Inválida"
-        };
+        try {
+          const res = await fetch("/api/xtream/auth", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: trimmedUser, password: trimmedPass })
+          });
+          if (res.ok) {
+            data = await res.json();
+          } else {
+            const err = await res.json().catch(() => ({}));
+            if (err.error === "Cuenta Inválida") {
+              return { success: false, error: "Cuenta Inválida" };
+            }
+          }
+        } catch (_e) {
+          // proxy failed, try direct
+        }
+
+        if (!data) {
+          data = await fetchDirectJson(directUrl, 15000);
+        }
       }
+
+      if (data) {
+        if (typeof data === "string") {
+          try {
+            data = JSON.parse(data);
+          } catch (_e) {}
+        }
+
+        const auth = data?.user_info?.auth;
+        const status = data?.user_info?.status;
+
+        if (auth === 1 || auth === "1" || String(status).toLowerCase() === "active") {
+          this.saveCredentials(trimmedUser, trimmedPass, false, data.user_info);
+          return {
+            success: true,
+            user_info: data.user_info
+          };
+        }
+      }
+
+      return {
+        success: false,
+        error: "Cuenta Inválida"
+      };
     } catch (e: any) {
       console.error("Auth request failed:", e);
       return {
@@ -134,18 +244,16 @@ class XtreamService {
     }
 
     try {
-      const response = await fetch("/api/xtream/categories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_vod_categories`;
+      const categories: MediaCategory[] = await fetchProxyOrDirect(
+        "/api/xtream/categories",
+        {
           username: this.userCredentials.username,
           password: this.userCredentials.password,
           type: "vod"
-        })
-      });
-
-      if (!response.ok) throw new Error("Failed to fetch categories");
-      const categories: MediaCategory[] = await response.json();
+        },
+        directUrl
+      );
 
       if (Array.isArray(categories) && categories.length > 0) {
         return [
@@ -166,18 +274,16 @@ class XtreamService {
     }
 
     try {
-      const response = await fetch("/api/xtream/categories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_series_categories`;
+      const categories: MediaCategory[] = await fetchProxyOrDirect(
+        "/api/xtream/categories",
+        {
           username: this.userCredentials.username,
           password: this.userCredentials.password,
           type: "series"
-        })
-      });
-
-      if (!response.ok) throw new Error("Failed to fetch series categories");
-      const categories: MediaCategory[] = await response.json();
+        },
+        directUrl
+      );
 
       if (Array.isArray(categories) && categories.length > 0) {
         return [
@@ -200,19 +306,19 @@ class XtreamService {
     }
 
     try {
-      const response = await fetch("/api/xtream/streams", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const catParam = categoryId && categoryId !== "all" ? `&category_id=${encodeURIComponent(categoryId)}` : "";
+      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_vod_streams${catParam}`;
+      const data = await fetchProxyOrDirect(
+        "/api/xtream/streams",
+        {
           username: this.userCredentials.username,
           password: this.userCredentials.password,
           type: "vod",
           category_id: categoryId === "all" ? undefined : categoryId
-        })
-      });
+        },
+        directUrl
+      );
 
-      if (!response.ok) throw new Error("Failed to load movies");
-      const data = await response.json();
       if (Array.isArray(data) && data.length > 0) {
         return data;
       }
@@ -231,19 +337,19 @@ class XtreamService {
     }
 
     try {
-      const response = await fetch("/api/xtream/streams", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const catParam = categoryId && categoryId !== "all" ? `&category_id=${encodeURIComponent(categoryId)}` : "";
+      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_series${catParam}`;
+      const data = await fetchProxyOrDirect(
+        "/api/xtream/streams",
+        {
           username: this.userCredentials.username,
           password: this.userCredentials.password,
           type: "series",
           category_id: categoryId === "all" ? undefined : categoryId
-        })
-      });
+        },
+        directUrl
+      );
 
-      if (!response.ok) throw new Error("Failed to load series");
-      const data = await response.json();
       if (Array.isArray(data) && data.length > 0) {
         return data;
       }
@@ -287,19 +393,22 @@ class XtreamService {
     }
 
     try {
-      const response = await fetch("/api/xtream/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const directUrl = `${XTREAM_SERVER_HOST}/player_api.php?username=${encodeURIComponent(this.userCredentials.username)}&password=${encodeURIComponent(this.userCredentials.password)}&action=get_series_info&series_id=${encodeURIComponent(seriesId)}`;
+      const data = await fetchProxyOrDirect(
+        "/api/xtream/info",
+        {
           username: this.userCredentials.username,
           password: this.userCredentials.password,
           type: "series",
           id: String(seriesId)
-        })
-      });
+        },
+        directUrl
+      );
 
-      if (!response.ok) throw new Error("Failed to load series info");
-      return await response.json();
+      if (data && (data.episodes || data.info || data.seasons)) {
+        return data;
+      }
+      throw new Error("No data");
     } catch (_e) {
       return {
         seasons: [{ season_number: 1, name: "Temporada 1", episode_count: 4 }],
@@ -327,8 +436,14 @@ class XtreamService {
   public getStreamUrl(type: 'movie' | 'series', streamId: string | number, extension = 'mp4'): string {
     const creds = this.userCredentials;
     if (this.isDemoMode || !creds) {
-      // Demo streaming video (Big Buck Bunny high quality trailer for testing)
       return "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+    }
+
+    const streamType = type === 'series' ? 'series' : 'movie';
+
+    // In native Android APK, stream directly from the Xtream server!
+    if (isNativeApp()) {
+      return `${XTREAM_SERVER_HOST}/${streamType}/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${extension}`;
     }
 
     // In web environment, use proxy to support Range headers, avoid CORS and mixed-content
@@ -342,9 +457,12 @@ class XtreamService {
     return `${XTREAM_SERVER_HOST}/${type}/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${extension}`;
   }
 
-  // Resolve safe poster URL (passes through /api/proxy-image if needed)
+  // Resolve safe poster URL
   public getSafePosterUrl(url?: string): string {
     if (!url) return "";
+    if (isNativeApp()) {
+      return url;
+    }
     if (url.startsWith("http://")) {
       return `/api/proxy-image?url=${encodeURIComponent(url)}`;
     }

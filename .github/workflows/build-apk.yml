@@ -42,12 +42,39 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
-      - name: Asegurar permisos de red HTTP zonacero en AndroidManifest.xml
+      - name: Asegurar iconos de Master Movie y permisos de red HTTP zonacero
         run: |
+          # Copiar iconos y pantallas de inicio de Master Movie
+          if [ -d "resources/android-res" ]; then
+            cp -r resources/android-res/* android/app/src/main/res/ || true
+          fi
+
+          # Crear o verificar network_security_config.xml
+          mkdir -p android/app/src/main/res/xml
+          cat << 'EOF' > android/app/src/main/res/xml/network_security_config.xml
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">zonacero.lat</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
+EOF
+
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             if ! grep -q 'usesCleartextTraffic' "$MANIFEST"; then
               sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' "$MANIFEST"
+            fi
+            if ! grep -q 'networkSecurityConfig' "$MANIFEST"; then
+              sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config"/g' "$MANIFEST"
             fi
           fi
 

@@ -64,6 +64,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <img
               src="/logo.png"
               alt="Master Movie Logo"
+              referrerPolicy="no-referrer"
               className="w-full h-full object-cover"
             />
           </div>
