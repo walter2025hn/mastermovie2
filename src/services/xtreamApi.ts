@@ -85,7 +85,7 @@ class XtreamService {
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
-        return { success: false, error: errJson.error || `Error ${response.status} en el servidor` };
+        return { success: false, error: errJson.error || "Cuenta Inválida" };
       }
 
       const data = await response.json();
@@ -101,14 +101,14 @@ class XtreamService {
       } else {
         return {
           success: false,
-          error: "Credenciales no reconocidas por el servidor zonacero.lat o cuenta vencida."
+          error: "Cuenta Inválida"
         };
       }
     } catch (e: any) {
       console.error("Auth request failed:", e);
       return {
         success: false,
-        error: "Error de red al contactar con http://zonacero.lat:8080"
+        error: "Cuenta Inválida"
       };
     }
   }

@@ -57,13 +57,13 @@ app.post("/api/xtream/auth", async (req, res) => {
     }
 
     return res.status(401).json({
-      error: "Credenciales no reconocidas por zonacero.lat o cuenta inactiva",
+      error: "Cuenta Inválida",
       user_info: { auth: 0 },
     });
   } catch (error: any) {
     console.error("Auth proxy error:", error?.message);
-    return res.status(500).json({
-      error: "No se pudo conectar con zonacero.lat:8080",
+    return res.status(401).json({
+      error: "Cuenta Inválida",
       details: error?.message,
     });
   }

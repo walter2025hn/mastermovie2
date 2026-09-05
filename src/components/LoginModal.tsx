@@ -35,7 +35,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     if (result.success) {
       onLoginSuccess(result.user_info?.username || username.trim(), false, result.user_info);
     } else {
-      setError(result.error || 'Credenciales incorrectas o cuenta inactiva');
+      setError('Cuenta Inválida');
     }
   };
 
@@ -115,9 +115,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="mt-5 space-y-3.5 relative z-10">
           {error && (
-            <div className="p-3 rounded-xl bg-red-950/60 border border-red-800/60 text-red-200 text-xs flex items-start gap-2 animate-shake">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div className="p-3 rounded-xl bg-red-950/70 border border-red-800/80 text-red-200 text-xs flex items-center gap-2.5 animate-shake shadow-lg shadow-red-950/50">
+              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+              <span className="font-bold tracking-wide">
+                {error.toLowerCase().includes('servidor') ||
+                error.toLowerCase().includes('zonacero') ||
+                error.toLowerCase().includes('http') ||
+                error.toLowerCase().includes('red') ||
+                error.toLowerCase().includes('credenciales')
+                  ? 'Cuenta Inválida'
+                  : error}
+              </span>
             </div>
           )}
 

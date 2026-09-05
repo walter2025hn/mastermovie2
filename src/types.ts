@@ -95,6 +95,8 @@ export interface SeriesStream {
 export interface SeriesEpisode {
   id: string | number;
   episode_num: number;
+  season?: number;
+  season_num?: number;
   title: string;
   container_extension: string;
   info?: {

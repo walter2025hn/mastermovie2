@@ -14,7 +14,9 @@ import {
   Download,
   Info,
   User,
-  Calendar
+  Calendar,
+  Clock,
+  LogOut
 } from 'lucide-react';
 import {
   ContentTab,
@@ -23,17 +25,20 @@ import {
   MediaCategory,
   FilterOptions,
   SeriesEpisode,
-  XtreamUserInfo
+  XtreamUserInfo,
+  HistoryItem
 } from './types';
 import { xtreamService } from './services/xtreamApi';
 import { useDeviceMode } from './hooks/useDeviceMode';
 import { useFavorites } from './hooks/useFavorites';
+import { useHistory } from './hooks/useHistory';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { FilterBar } from './components/FilterBar';
 import { MediaCard } from './components/MediaCard';
 import { MediaDetailModal } from './components/MediaDetailModal';
 import { VideoPlayer } from './components/VideoPlayer';
+import { HistoryView } from './components/HistoryView';
 import { DeviceModeSelector } from './components/DeviceModeSelector';
 import { LoginModal } from './components/LoginModal';
 import { SupportCreatorCard } from './components/SupportCreatorCard';
@@ -53,6 +58,14 @@ const BATCH_SIZE = 60; // "haz que las peliculas carguen de 60 en 60"
 export default function App() {
   const { mode: deviceMode, setMode: setDeviceMode, config: modeConfig } = useDeviceMode();
   const { favorites, isFavorite, toggleFavorite } = useFavorites();
+  const {
+    history,
+    recordPlayback,
+    updateProgress,
+    removeFromHistory,
+    clearHistory,
+    getHistoryItem,
+  } = useHistory();
 
   // Authentication State & User Info (incluyendo fecha de expiración)
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -64,7 +77,7 @@ export default function App() {
   // Navigation & Saved Tabs - Guarda la pestaña seleccionada para no perderla
   const [activeTab, setActiveTab] = useState<ContentTab>(() => {
     const saved = localStorage.getItem('master_movie_active_tab');
-    if (saved && ['all', 'movies', 'series', 'favorites', 'settings'].includes(saved)) {
+    if (saved && ['all', 'movies', 'series', 'history', 'favorites', 'settings'].includes(saved)) {
       return saved as ContentTab;
     }
     return 'all';
@@ -102,10 +115,18 @@ export default function App() {
   } | null>(null);
 
   const [activePlayback, setActivePlayback] = useState<{
+    id: string | number;
+    mediaType: 'movie' | 'series';
     title: string;
     subtitle?: string;
     streamUrl: string;
     directXtreamUrl?: string;
+    initialTime?: number;
+    containerExtension?: string;
+    seriesId?: string | number;
+    episodeId?: string | number;
+    episodeNum?: number;
+    seasonNum?: number;
   } | null>(null);
 
   const [showDeviceSelector, setShowDeviceSelector] = useState<boolean>(false);
@@ -506,12 +527,29 @@ export default function App() {
     const ext = movie.container_extension || 'mp4';
     const streamUrl = xtreamService.getStreamUrl('movie', movie.stream_id, ext);
     const directXtreamUrl = xtreamService.getDirectXtreamStreamUrl('movie', movie.stream_id, ext);
+    const existing = getHistoryItem(movie.stream_id);
+    const initialTime = existing && existing.currentTime > 10 && !existing.completed ? existing.currentTime : 0;
+
+    recordPlayback({
+      id: movie.stream_id,
+      mediaType: 'movie',
+      title: movie.name,
+      subtitle: 'Película • Full HD',
+      poster: movie.stream_icon,
+      streamUrl,
+      directXtreamUrl,
+      containerExtension: ext,
+    });
 
     setActivePlayback({
+      id: movie.stream_id,
+      mediaType: 'movie',
       title: movie.name,
       subtitle: 'Película • Full HD',
       streamUrl,
       directXtreamUrl,
+      initialTime,
+      containerExtension: ext,
     });
     window.history.pushState({ appNav: true, tab: activeTab }, '');
   };
@@ -521,12 +559,57 @@ export default function App() {
     const ext = episode.container_extension || 'mp4';
     const streamUrl = xtreamService.getStreamUrl('series', episode.id, ext);
     const directXtreamUrl = xtreamService.getDirectXtreamStreamUrl('series', episode.id, ext);
+    const existing = getHistoryItem(episode.id);
+    const initialTime = existing && existing.currentTime > 10 && !existing.completed ? existing.currentTime : 0;
+    const epSubtitle = episode.title || `Temporada ${episode.season_num || 1} • Episodio ${episode.episode_num}`;
 
-    setActivePlayback({
+    recordPlayback({
+      id: episode.id,
+      mediaType: 'series',
       title: s.name,
-      subtitle: episode.title || `Episodio ${episode.episode_num}`,
+      subtitle: epSubtitle,
+      poster: episode.info?.movie_image || s.cover,
       streamUrl,
       directXtreamUrl,
+      containerExtension: ext,
+      seriesId: s.series_id,
+      episodeId: episode.id,
+      episodeNum: episode.episode_num,
+      seasonNum: episode.season_num,
+    });
+
+    setActivePlayback({
+      id: episode.id,
+      mediaType: 'series',
+      title: s.name,
+      subtitle: epSubtitle,
+      streamUrl,
+      directXtreamUrl,
+      initialTime,
+      containerExtension: ext,
+      seriesId: s.series_id,
+      episodeId: episode.id,
+      episodeNum: episode.episode_num,
+      seasonNum: episode.season_num,
+    });
+    window.history.pushState({ appNav: true, tab: activeTab }, '');
+  };
+
+  // Resume from History View
+  const handleResumeHistory = (item: HistoryItem, resumeTime: number) => {
+    setActivePlayback({
+      id: item.id,
+      mediaType: item.mediaType,
+      title: item.title,
+      subtitle: item.subtitle,
+      streamUrl: item.streamUrl,
+      directXtreamUrl: item.directXtreamUrl,
+      initialTime: resumeTime,
+      containerExtension: item.containerExtension,
+      seriesId: item.seriesId,
+      episodeId: item.episodeId,
+      episodeNum: item.episodeNum,
+      seasonNum: item.seasonNum,
     });
     window.history.pushState({ appNav: true, tab: activeTab }, '');
   };
@@ -635,13 +718,24 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 rounded-xl bg-black/40 border border-gray-800 text-xs gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="text-gray-300">Servidor zonacero.lat:8080 (En línea)</span>
+                  <span className="text-gray-300">Servidor Master Movie Ultra HD (En línea)</span>
                 </div>
                 {userInfo?.max_connections && (
                   <span className="text-[11px] text-gray-400">
                     Pantallas: <strong className="text-white">{userInfo.max_connections} simultáneas</strong>
                   </span>
                 )}
+              </div>
+
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="w-full py-2.5 px-3 rounded-xl bg-red-950/40 hover:bg-red-900/50 border border-red-800/40 hover:border-red-700/60 text-red-200 text-xs font-bold flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-red-400" />
+                  <span>Cambiar de Cuenta / Salir</span>
+                </button>
               </div>
             </div>
 
@@ -660,6 +754,15 @@ export default function App() {
               />
             </div>
           </div>
+        ) : activeTab === 'history' ? (
+          <HistoryView
+            history={history}
+            deviceMode={deviceMode}
+            onResume={handleResumeHistory}
+            onRemoveItem={removeFromHistory}
+            onClearHistory={clearHistory}
+            onExploreCatalog={() => handleTabChange('all')}
+          />
         ) : (
           <>
             {/* Filter and Search Bar */}
@@ -795,6 +898,7 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={handleTabChange}
         favoritesCount={favorites.length}
+        historyCount={history.length}
       />
 
       {/* Detail Modal */}
@@ -826,6 +930,12 @@ export default function App() {
           streamUrl={activePlayback.streamUrl}
           directXtreamUrl={activePlayback.directXtreamUrl}
           deviceMode={deviceMode}
+          initialTime={activePlayback.initialTime}
+          onProgressUpdate={(currentTime, duration) => {
+            if (activePlayback) {
+              updateProgress(activePlayback.id, currentTime, duration);
+            }
+          }}
           onClose={() => setActivePlayback(null)}
         />
       )}
